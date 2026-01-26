@@ -1,11 +1,11 @@
 const mysql = require("mysql2/promise");
 
 const pool = mysql.createPool({
-    user: "admin",
-    host: "database-1.cyrkso46ad7j.us-east-1.rds.amazonaws.com",
-    database: "higerpolynomial",
-    password: "OFp5iOQDXeUYnE5hi9L7",
-    port: 3306,
+    user: process.env.DB_USER,
+    host: process.env.DB_HOST,
+    database: process.env.DB_NAME,
+    password: process.env.DB_PASS,
+    port: process.env.DB_PORT || 3306,
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,

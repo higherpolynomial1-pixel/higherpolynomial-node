@@ -1,11 +1,27 @@
 const express = require("express");
-const { signup, createTable } = require("../controllers/userController");
+const {
+    registerUser,
+    verifyOtpAndSignup,
+    loginUser,
+    forgotPassword,
+    resetPassword
+} = require("../controllers/userController");
 
-const router = express.Router();
+const userRouter = express.Router();
 
+// Send OTP & store signup details
+userRouter.post("/signup", registerUser);
 
+// Login User
+userRouter.post("/login", loginUser);
 
-// Signup route
-router.post("/signup", signup);
+// Verify OTP & create account
+userRouter.post("/verify-otp", verifyOtpAndSignup);
 
-module.exports = router;
+// Forgot Password - Send OTP
+userRouter.post("/forgot-password", forgotPassword);
+
+// Reset Password - Verify OTP & Update Password
+userRouter.post("/reset-password", resetPassword);
+
+module.exports = userRouter;
