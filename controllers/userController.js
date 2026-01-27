@@ -2,6 +2,7 @@ const pool = require("../config/awsDb");
 const bcrypt = require("bcrypt");
 const nodemailer = require("nodemailer");
 const jwt = require("jsonwebtoken");
+const { getOTPTemplate } = require("../utils/emailTemplates");
 
 // Email transporter
 const transporter = nodemailer.createTransport({
@@ -51,8 +52,8 @@ const registerUser = async (req, res) => {
         await transporter.sendMail({
             from: process.env.EMAIL_USER,
             to: email,
-            subject: "Signup OTP Verification",
-            text: `Your OTP is ${otp}. It is valid for 5 minutes.`,
+            subject: "Verify your HigherPolynomia Account",
+            html: getOTPTemplate(name, otp, 'signup'),
         });
 
         res.status(200).json({ message: "OTP sent to email" });
@@ -192,8 +193,8 @@ const forgotPassword = async (req, res) => {
         await transporter.sendMail({
             from: process.env.EMAIL_USER,
             to: email,
-            subject: "Password Reset OTP",
-            text: `Your OTP for password reset is ${otp}. It is valid for 5 minutes.`,
+            subject: "Reset your HigherPolynomia Password",
+            html: getOTPTemplate(user[0].name, otp, 'reset'),
         });
 
         res.status(200).json({ message: "OTP sent to email" });
