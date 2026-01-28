@@ -6,7 +6,9 @@ const multer = require("multer");
 const s3 = new AWS.S3({
     accessKeyId: process.env.AWS_ACCESS_KEY_ID,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    region: process.env.AWS_REGION
+    region: process.env.AWS_REGION || 'us-east-1',
+    signatureVersion: 'v4',
+    // s3ForcePathStyle: true // Try setting this if virtual hosting fails
 });
 
 const BUCKET_NAME = process.env.S3_BUCKET_NAME;
@@ -72,11 +74,11 @@ const deleteFromS3 = (url) => {
 // Create a new course
 const createCourse = async (req, res) => {
     try {
-        const { title, description, price, category, createdBy } = req.body;
+        const { title, description, price, category, createdBy, thumbnailUrl: clientThumbnailUrl, videoUrl: clientVideoUrl, notesUrl: clientNotesUrl } = req.body;
 
-        let thumbnailUrl = null;
-        let videoUrl = null;
-        let notesUrl = null;
+        let thumbnailUrl = clientThumbnailUrl || null;
+        let videoUrl = clientVideoUrl || null;
+        let notesUrl = clientNotesUrl || null;
 
         if (req.files && req.files['thumbnail']) {
             thumbnailUrl = await uploadToS3(req.files['thumbnail'][0]);
@@ -109,15 +111,15 @@ const createCourse = async (req, res) => {
 // Admin Upload Video
 const uploadVideo = async (req, res) => {
     try {
-        const { courseId, playlistId, title, description, duration, orderIndex } = req.body;
+        const { courseId, playlistId, title, description, duration, orderIndex, videoUrl: clientVideoUrl, thumbnailUrl: clientThumbnailUrl, notesUrl: clientNotesUrl } = req.body;
 
         // Files are handled by uploadMiddleware as req.files
         const videoFile = req.files && req.files['video'] ? req.files['video'][0] : null;
         const thumbnailFile = req.files && req.files['thumbnail'] ? req.files['thumbnail'][0] : null;
         const notesFile = req.files && req.files['notes'] ? req.files['notes'][0] : null;
 
-        if (!videoFile) {
-            return res.status(400).json({ message: "No video file provided" });
+        if (!videoFile && !clientVideoUrl) {
+            return res.status(400).json({ message: "No video file or URL provided" });
         }
 
         if (!playlistId) {
@@ -139,12 +141,12 @@ const uploadVideo = async (req, res) => {
             return res.status(404).json({ message: "Playlist not found or doesn't belong to this course" });
         }
 
-        // Upload all provided files to S3
-        let videoUrl = await uploadToS3(videoFile);
-        let thumbnailUrl = thumbnailFile ? await uploadToS3(thumbnailFile) : null;
-        let notesUrl = notesFile ? await uploadToS3(notesFile) : null;
+        // Upload provided files to S3 OR use provided URLs
+        let videoUrl = videoFile ? await uploadToS3(videoFile) : clientVideoUrl;
+        let thumbnailUrl = thumbnailFile ? await uploadToS3(thumbnailFile) : clientThumbnailUrl;
+        let notesUrl = notesFile ? await uploadToS3(notesFile) : clientNotesUrl;
 
-        // Save metadata to MySQL with playlist_id and new fields
+        // Save metadata to MySQL
         await pool.query(
             "INSERT INTO course_videos (course_id, playlist_id, title, description, video_url, thumbnail, notes_pdf, duration, order_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [courseId, playlistId, title, description || null, videoUrl, thumbnailUrl, notesUrl, duration || '00:00', orderIndex || 0]
@@ -227,15 +229,15 @@ const publishCourse = async (req, res) => {
 const updateCourse = async (req, res) => {
     try {
         const { id } = req.params;
-        const { title, description, price, category } = req.body;
+        const { title, description, price, category, thumbnailUrl: clientThumbnailUrl, videoUrl: clientVideoUrl, notesUrl: clientNotesUrl } = req.body;
 
         const [existing] = await pool.query("SELECT * FROM courses WHERE id = ?", [id]);
         if (existing.length === 0) return res.status(404).json({ message: "Course not found" });
 
         const course = existing[0];
-        let thumbnailUrl = course.thumbnail;
-        let videoUrl = course.video_url;
-        let notesUrl = course.notes_pdf;
+        let thumbnailUrl = clientThumbnailUrl || course.thumbnail;
+        let videoUrl = clientVideoUrl || course.video_url;
+        let notesUrl = clientNotesUrl || course.notes_pdf;
 
         if (req.files && req.files['thumbnail']) {
             await deleteFromS3(course.thumbnail);
@@ -299,15 +301,15 @@ const deleteCourse = async (req, res) => {
 const updateVideo = async (req, res) => {
     try {
         const { id } = req.params;
-        const { title, description, duration, playlistId } = req.body;
+        const { title, description, duration, playlistId, videoUrl: clientVideoUrl, thumbnailUrl: clientThumbnailUrl, notesUrl: clientNotesUrl } = req.body;
 
         const [existing] = await pool.query("SELECT * FROM course_videos WHERE id = ?", [id]);
         if (existing.length === 0) return res.status(404).json({ message: "Video not found" });
 
         const video = existing[0];
-        let videoUrl = video.video_url;
-        let thumbnailUrl = video.thumbnail;
-        let notesUrl = video.notes_pdf;
+        let videoUrl = clientVideoUrl || video.video_url;
+        let thumbnailUrl = clientThumbnailUrl || video.thumbnail;
+        let notesUrl = clientNotesUrl || video.notes_pdf;
 
         if (req.files && req.files['video']) {
             await deleteFromS3(video.video_url);
@@ -353,6 +355,39 @@ const deleteVideo = async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: "Server error" });
+    }
+};
+
+// Generate S3 Presigned URL for direct client upload
+const generatePresignedUrl = async (req, res) => {
+    try {
+        const { fileName, fileType } = req.query;
+
+        if (!fileName || !fileType) {
+            return res.status(400).json({ message: "fileName and fileType are required" });
+        }
+
+        const fileKey = `${S3_FOLDER}${Date.now()}_${fileName}`;
+
+        const params = {
+            Bucket: BUCKET_NAME,
+            Key: fileKey,
+            Expires: 600, // URL valid for 10 minutes
+            ContentType: fileType || 'application/octet-stream',
+        };
+
+        const uploadUrl = await s3.getSignedUrlPromise('putObject', params);
+        console.log("=== Generated V4 Presigned URL ===");
+        console.log(uploadUrl);
+
+        res.status(200).json({
+            uploadUrl,
+            fileKey,
+            publicUrl: `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION || 'us-east-1'}.amazonaws.com/${fileKey}`
+        });
+    } catch (error) {
+        console.error("Presigned URL Error:", error);
+        res.status(500).json({ message: "Server error", error: error.message });
     }
 };
 
@@ -418,5 +453,6 @@ module.exports = {
     getCourseVideos,
     getAllCourses,
     getCourseById,
+    generatePresignedUrl,
     uploadMiddleware
 };

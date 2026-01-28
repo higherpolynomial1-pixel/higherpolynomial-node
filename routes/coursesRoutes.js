@@ -10,6 +10,7 @@ const {
     getCourseVideos,
     getAllCourses,
     getCourseById,
+    generatePresignedUrl,
     uploadMiddleware
 } = require("../controllers/coursesController");
 
@@ -32,6 +33,9 @@ coursesRouter.delete("/courses/:id", deleteCourse);
 
 // Publish Course
 coursesRouter.patch("/admin/courses/:id/publish", publishCourse);
+
+// Generate S3 Presigned URL
+coursesRouter.get("/admin/generate-presigned-url", generatePresignedUrl);
 
 // Admin Upload Video (uses multer middleware)
 coursesRouter.post("/admin/upload-video", uploadMiddleware, uploadVideo);
