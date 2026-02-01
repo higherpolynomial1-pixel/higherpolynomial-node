@@ -24,7 +24,7 @@ coursesRouter.post("/courses", authMiddleware, uploadMiddleware, createCourse);
 coursesRouter.get("/courses", getAllCourses);
 
 // Get single course by ID
-coursesRouter.get("/courses/:id", authMiddleware, getCourseById);
+coursesRouter.get("/courses/:id", getCourseById);
 
 // Update Course
 coursesRouter.put("/courses/:id", authMiddleware, uploadMiddleware, updateCourse);
