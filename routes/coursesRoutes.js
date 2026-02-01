@@ -21,7 +21,7 @@ const coursesRouter = express.Router();
 coursesRouter.post("/courses", authMiddleware, uploadMiddleware, createCourse);
 
 // Get all courses (Supports ?role=admin)
-coursesRouter.get("/courses", authMiddleware, getAllCourses);
+coursesRouter.get("/courses", getAllCourses);
 
 // Get single course by ID
 coursesRouter.get("/courses/:id", authMiddleware, getCourseById);
