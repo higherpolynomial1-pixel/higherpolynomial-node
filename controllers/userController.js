@@ -140,11 +140,15 @@ const loginUser = async (req, res) => {
             return res.status(400).json({ message: "Invalid credentials" });
         }
 
-        // Generate JWT Token
+        // Increment token version
+        const newTokenVersion = (user[0].token_version || 0) + 1;
+        await pool.query("UPDATE signup SET token_version = ? WHERE id = ?", [newTokenVersion, user[0].id]);
+
+        // Generate JWT Token with token_version
         const token = jwt.sign(
-            { id: user[0].id, email: user[0].email },
+            { id: user[0].id, email: user[0].email, token_version: newTokenVersion },
             process.env.JWT_SECRET || "defaultsecret",
-            { expiresIn: "1h" }
+            { expiresIn: "240h" } // Extended to 10 days for convenience, but single session is enforced
         );
 
         res.status(200).json({

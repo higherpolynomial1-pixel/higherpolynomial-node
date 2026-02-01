@@ -7,21 +7,23 @@ const {
     deletePlaylist
 } = require("../controllers/playlistController");
 
+const authMiddleware = require("../middleware/authMiddleware");
+
 const playlistRouter = express.Router();
 
 // Create a new playlist
-playlistRouter.post("/playlists", createPlaylist);
+playlistRouter.post("/playlists", authMiddleware, createPlaylist);
 
 // Get all playlists for a specific course
-playlistRouter.get("/courses/:courseId/playlists", getCoursePlaylists);
+playlistRouter.get("/courses/:courseId/playlists", authMiddleware, getCoursePlaylists);
 
 // Get single playlist with videos
-playlistRouter.get("/playlists/:id", getPlaylistById);
+playlistRouter.get("/playlists/:id", authMiddleware, getPlaylistById);
 
 // Update playlist
-playlistRouter.put("/playlists/:id", updatePlaylist);
+playlistRouter.put("/playlists/:id", authMiddleware, updatePlaylist);
 
 // Delete playlist
-playlistRouter.delete("/playlists/:id", deletePlaylist);
+playlistRouter.delete("/playlists/:id", authMiddleware, deletePlaylist);
 
 module.exports = playlistRouter;

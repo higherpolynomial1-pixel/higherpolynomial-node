@@ -6,16 +6,18 @@ const {
     rejectDoubtRequest
 } = require("../controllers/doubtController.js");
 
+const authMiddleware = require("../middleware/authMiddleware.js");
+
 const doubtRouter = express.Router();
 
-// Submit a doubt request
-doubtRouter.post("/doubt-requests", submitDoubtRequest);
+// Submit a doubt request (Needs auth)
+doubtRouter.post("/doubt-requests", authMiddleware, submitDoubtRequest);
 
-// Get all doubt requests (Admin only)
-doubtRouter.get("/admin/doubt-requests", getAllDoubtRequests);
+// Get all doubt requests (Admin only - auth required)
+doubtRouter.get("/admin/doubt-requests", authMiddleware, getAllDoubtRequests);
 
 // Accept/Reject doubt requests
-doubtRouter.patch("/admin/doubt-requests/:id/accept", acceptDoubtRequest);
-doubtRouter.patch("/admin/doubt-requests/:id/reject", rejectDoubtRequest);
+doubtRouter.patch("/admin/doubt-requests/:id/accept", authMiddleware, acceptDoubtRequest);
+doubtRouter.patch("/admin/doubt-requests/:id/reject", authMiddleware, rejectDoubtRequest);
 
 module.exports = doubtRouter;
