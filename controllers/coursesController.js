@@ -71,6 +71,23 @@ const deleteFromS3 = (url) => {
     });
 };
 
+// Helper: Sign S3 URLs for temporary access
+const signS3Url = (url) => {
+    if (!url || typeof url !== 'string' || !url.includes('.s3.')) return url;
+    try {
+        const urlObj = new URL(url);
+        // Pathname starts with / so remove it
+        const key = decodeURIComponent(urlObj.pathname.substring(1));
+        return s3.getSignedUrl('getObject', {
+            Bucket: BUCKET_NAME,
+            Key: key,
+            Expires: 7200 // 2 hours
+        });
+    } catch (e) {
+        return url;
+    }
+};
+
 // Create a new course
 const createCourse = async (req, res) => {
     try {
@@ -403,7 +420,8 @@ const getCourseById = async (req, res) => {
             return res.status(404).json({ message: "Course not found" });
         }
 
-        const course = courses[0];
+        const course = { ...courses[0] };
+        course.video_url = signS3Url(course.video_url);
 
         // Fetch playlists for this course
         const [playlists] = await pool.query(
@@ -413,23 +431,35 @@ const getCourseById = async (req, res) => {
 
         // For each playlist, fetch its videos
         const playlistsWithVideos = await Promise.all(
-            playlists.map(async (playlist) => {
+            playlists.map(async (p) => {
                 const [videos] = await pool.query(
                     "SELECT * FROM course_videos WHERE playlist_id = ? ORDER BY order_index ASC, created_at ASC",
-                    [playlist.id]
+                    [p.id]
                 );
+
+                // Sign video URLs
+                const signedVideos = videos.map(v => ({
+                    ...v,
+                    video_url: signS3Url(v.video_url)
+                }));
+
                 return {
-                    ...playlist,
-                    videos
+                    ...p,
+                    videos: signedVideos
                 };
             })
         );
 
         // Also fetch videos without playlists (legacy support)
-        const [orphanedVideos] = await pool.query(
+        const [orphanedVideosResult] = await pool.query(
             "SELECT * FROM course_videos WHERE course_id = ? AND playlist_id IS NULL ORDER BY created_at ASC",
             [id]
         );
+
+        const orphanedVideos = orphanedVideosResult.map(v => ({
+            ...v,
+            video_url: signS3Url(v.video_url)
+        }));
 
         res.status(200).json({
             course,
