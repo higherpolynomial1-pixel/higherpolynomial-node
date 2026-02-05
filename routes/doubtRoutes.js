@@ -3,12 +3,24 @@ const {
     submitDoubtRequest,
     getAllDoubtRequests,
     acceptDoubtRequest,
-    rejectDoubtRequest
+    rejectDoubtRequest,
+    createDoubtSlot,
+    getSlotsByCourse,
+    getAllDoubtSlots,
+    deleteDoubtSlot
 } = require("../controllers/doubtController.js");
 
 const authMiddleware = require("../middleware/authMiddleware.js");
 
 const doubtRouter = express.Router();
+
+// Admin: Create Slot
+doubtRouter.post("/admin/doubt-slots", authMiddleware, createDoubtSlot);
+doubtRouter.get("/admin/doubt-slots", authMiddleware, getAllDoubtSlots);
+doubtRouter.delete("/admin/doubt-slots/:id", authMiddleware, deleteDoubtSlot);
+
+// Public/Student: Get Slots for a course
+doubtRouter.get("/courses/:courseId/doubt-slots", getSlotsByCourse);
 
 // Submit a doubt request (Needs auth)
 doubtRouter.post("/doubt-requests", authMiddleware, submitDoubtRequest);
