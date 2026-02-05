@@ -15,21 +15,21 @@ const authMiddleware = require("../middleware/authMiddleware.js");
 const doubtRouter = express.Router();
 
 // Admin: Create Slot
-doubtRouter.post("/admin/doubt-slots", authMiddleware, createDoubtSlot);
-doubtRouter.get("/admin/doubt-slots", authMiddleware, getAllDoubtSlots);
-doubtRouter.delete("/admin/doubt-slots/:id", authMiddleware, deleteDoubtSlot);
+doubtRouter.post("/admin/doubt-slots", createDoubtSlot);
+doubtRouter.get("/admin/doubt-slots", getAllDoubtSlots);
+doubtRouter.delete("/admin/doubt-slots/:id", deleteDoubtSlot);
 
 // Public/Student: Get Slots for a course
 doubtRouter.get("/courses/:courseId/doubt-slots", getSlotsByCourse);
 
-// Submit a doubt request (Needs auth)
-doubtRouter.post("/doubt-requests", authMiddleware, submitDoubtRequest);
+// Submit a doubt request
+doubtRouter.post("/doubt-requests", submitDoubtRequest);
 
 // Get all doubt requests (Admin only - public for now)
 doubtRouter.get("/admin/doubt-requests", getAllDoubtRequests);
 
 // Accept/Reject doubt requests
-doubtRouter.patch("/admin/doubt-requests/:id/accept", authMiddleware, acceptDoubtRequest);
-doubtRouter.patch("/admin/doubt-requests/:id/reject", authMiddleware, rejectDoubtRequest);
+doubtRouter.patch("/admin/doubt-requests/:id/accept", acceptDoubtRequest);
+doubtRouter.patch("/admin/doubt-requests/:id/reject", rejectDoubtRequest);
 
 module.exports = doubtRouter;
