@@ -1,6 +1,8 @@
 const pool = require("../config/awsDb");
 const AWS = require("aws-sdk");
 const multer = require("multer");
+const axios = require("axios");
+const { processVideoToHLS } = require("../utils/hlsConverter");
 
 // AWS Configuration
 const s3 = new AWS.S3({
@@ -101,23 +103,49 @@ const createCourse = async (req, res) => {
             thumbnailUrl = await uploadToS3(req.files['thumbnail'][0]);
         }
 
+        let originalVideoUrl = null;
+        let conversionStatus = 'skipped';
+        let isHLS = false;
+
         if (req.files && req.files['video']) {
-            videoUrl = await uploadToS3(req.files['video'][0]);
+            isHLS = req.files['video'][0].originalname.endsWith('.m3u8');
+
+            if (isHLS) {
+                videoUrl = await uploadToS3(req.files['video'][0]);
+                conversionStatus = 'skipped';
+            } else {
+                // Upload original MP4 first to S3 as backup
+                originalVideoUrl = await uploadToS3(req.files['video'][0]);
+                videoUrl = originalVideoUrl; // Temporary URL until HLS is ready
+                conversionStatus = 'pending';
+            }
         }
 
         if (req.files && req.files['notes']) {
             notesUrl = await uploadToS3(req.files['notes'][0]);
         }
 
+        // Create the course record
         const [result] = await pool.query(
-            "INSERT INTO courses (title, description, price, thumbnail, category, video_url, notes_pdf, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [title, description, price, thumbnailUrl, category, videoUrl, notesUrl, createdBy]
+            "INSERT INTO courses (title, description, price, thumbnail, category, video_url, notes_pdf, created_by, video_conversion_status, original_video_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [title, description, price, thumbnailUrl, category, videoUrl, notesUrl, createdBy, conversionStatus, originalVideoUrl]
         );
 
+        const courseId = result.insertId;
+
+        // Perform HLS conversion in background if it's an MP4 video
+        if (req.files && req.files['video'] && !isHLS && conversionStatus === 'pending') {
+            console.log(`[HLS Conversion] Starting background conversion for course intro video ${courseId}...`);
+            convertCourseIntroToHLS(courseId, req.files['video'][0].buffer, req.files['video'][0].originalname).catch(err => {
+                console.error(`[HLS Conversion Error] Course ${courseId}:`, err);
+            });
+        }
+
         res.status(201).json({
-            message: "Course created",
-            courseId: result.insertId,
-            urls: { thumbnail: thumbnailUrl, video: videoUrl, notes: notesUrl }
+            message: "Course created. HLS conversion in progress if applicable.",
+            courseId: courseId,
+            urls: { thumbnail: thumbnailUrl, video: videoUrl, notes: notesUrl },
+            conversionStatus: conversionStatus
         });
     } catch (error) {
         console.error(error);
@@ -125,7 +153,7 @@ const createCourse = async (req, res) => {
     }
 };
 
-// Admin Upload Video
+// Admin Upload Video with Automatic HLS Conversion
 const uploadVideo = async (req, res) => {
     try {
         const { courseId, playlistId, title, description, duration, orderIndex, videoUrl: clientVideoUrl, thumbnailUrl: clientThumbnailUrl, notesUrl: clientNotesUrl } = req.body;
@@ -158,27 +186,192 @@ const uploadVideo = async (req, res) => {
             return res.status(404).json({ message: "Playlist not found or doesn't belong to this course" });
         }
 
-        // Upload provided files to S3 OR use provided URLs
-        let videoUrl = videoFile ? await uploadToS3(videoFile) : clientVideoUrl;
+        // Upload thumbnail and notes immediately
         let thumbnailUrl = thumbnailFile ? await uploadToS3(thumbnailFile) : clientThumbnailUrl;
         let notesUrl = notesFile ? await uploadToS3(notesFile) : clientNotesUrl;
 
+        // Handle video upload
+        let videoUrl = clientVideoUrl;
+        let originalVideoUrl = null;
+        let conversionStatus = 'skipped'; // Default for URL-based videos
+
+        if (videoFile) {
+            // Check if video is already HLS format
+            const isHLS = videoFile.originalname.endsWith('.m3u8');
+
+            if (isHLS) {
+                // Upload HLS file directly
+                videoUrl = await uploadToS3(videoFile);
+                conversionStatus = 'skipped';
+            } else {
+                // MP4 video - needs HLS conversion
+                // First, upload original MP4 as backup
+                originalVideoUrl = await uploadToS3(videoFile);
+                videoUrl = originalVideoUrl; // Temporarily use MP4 URL
+                conversionStatus = 'pending';
+            }
+        } else if (clientVideoUrl && clientVideoUrl.toLowerCase().includes('.mp4')) {
+            // ADMIN PROVIDED A DIRECT MP4 URL - ENFORCE CONVERSION
+            // We'll treat the client URL as the 'original' source
+            originalVideoUrl = clientVideoUrl;
+            videoUrl = clientVideoUrl;
+            conversionStatus = 'pending';
+        }
+
         // Save metadata to MySQL
-        await pool.query(
-            "INSERT INTO course_videos (course_id, playlist_id, title, description, video_url, thumbnail, notes_pdf, duration, order_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [courseId, playlistId, title, description || null, videoUrl, thumbnailUrl, notesUrl, duration || '00:00', orderIndex || 0]
+        const [result] = await pool.query(
+            "INSERT INTO course_videos (course_id, playlist_id, title, description, video_url, original_video_url, thumbnail, notes_pdf, duration, order_index, conversion_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [courseId, playlistId, title, description || null, videoUrl, originalVideoUrl, thumbnailUrl, notesUrl, duration || '00:00', orderIndex || 0, conversionStatus]
         );
 
+        const videoId = result.insertId;
+
+        // Start HLS conversion in background (non-blocking)
+        if (conversionStatus === 'pending') {
+            console.log(`[Upload Video] Starting background HLS conversion for video ID: ${videoId}`);
+
+            // If we have a file buffer, use it. If not (URL provided), convertVideoToHLS will need to handle it.
+            if (videoFile) {
+                convertVideoToHLS(videoId, videoFile.buffer, videoFile.originalname).catch(err => {
+                    console.error(`[Upload Video] Background conversion failed for video ${videoId}:`, err);
+                });
+            } else if (clientVideoUrl) {
+                // Trigger conversion from URL
+                convertVideoURLToHLS(videoId, clientVideoUrl, 'video').catch(err => {
+                    console.error(`[Upload Video URL] Background conversion failed for video ${videoId}:`, err);
+                });
+            }
+        }
+
         res.status(201).json({
-            message: "Video uploaded successfully",
+            message: "Video uploaded successfully" + (conversionStatus === 'pending' ? '. HLS conversion in progress.' : ''),
+            videoId,
             videoUrl,
             thumbnailUrl,
-            notesUrl
+            notesUrl,
+            conversionStatus
         });
 
     } catch (error) {
         console.error("Video Upload Error:", error);
         res.status(500).json({ message: "Server error", error: error.message });
+    }
+};
+
+// Background HLS Conversion Function for Course Intro Videos
+const convertCourseIntroToHLS = async (courseId, videoBuffer, originalFilename) => {
+    try {
+        // Update status to 'processing'
+        await pool.query(
+            "UPDATE courses SET video_conversion_status = 'processing' WHERE id = ?",
+            [courseId]
+        );
+
+        console.log(`[HLS Conversion] Starting intro conversion for course ${courseId}`);
+
+        // Convert and upload to S3
+        const playlistUrl = await processVideoToHLS(videoBuffer, originalFilename, courseId, 'course');
+
+        console.log(`[HLS Conversion] Intro conversion complete for course ${courseId}. Playlist URL: ${playlistUrl}`);
+
+        // Update database with HLS URL
+        await pool.query(
+            "UPDATE courses SET video_url = ?, video_conversion_status = 'completed' WHERE id = ?",
+            [playlistUrl, courseId]
+        );
+
+        console.log(`[HLS Conversion] Course ${courseId} intro database updated`);
+
+    } catch (error) {
+        console.error(`[HLS Conversion] Error converting intro for course ${courseId}:`, error);
+
+        // Update status to 'failed'
+        await pool.query(
+            "UPDATE courses SET video_conversion_status = 'failed' WHERE id = ?",
+            [courseId]
+        );
+    }
+};
+
+// Background HLS Conversion Function for Lesson Videos
+const convertVideoToHLS = async (videoId, videoBuffer, originalFilename) => {
+    try {
+        // Update status to 'processing'
+        await pool.query(
+            "UPDATE course_videos SET conversion_status = 'processing' WHERE id = ?",
+            [videoId]
+        );
+
+        console.log(`[HLS Conversion] Starting lesson conversion for video ${videoId}`);
+
+        // Convert and upload to S3
+        const playlistUrl = await processVideoToHLS(videoBuffer, originalFilename, videoId, 'video');
+
+        console.log(`[HLS Conversion] Lesson conversion complete for video ${videoId}. Playlist URL: ${playlistUrl}`);
+
+        // Update database with HLS URL
+        await pool.query(
+            "UPDATE course_videos SET video_url = ?, conversion_status = 'completed' WHERE id = ?",
+            [playlistUrl, videoId]
+        );
+
+        console.log(`[HLS Conversion] Video ${videoId} database updated`);
+
+    } catch (error) {
+        console.error(`[HLS Conversion] Error converting lesson video ${videoId}:`, error);
+
+        // Update status to 'failed'
+        await pool.query(
+            "UPDATE course_videos SET conversion_status = 'failed' WHERE id = ?",
+            [videoId]
+        );
+    }
+};
+
+// Background HLS Conversion Function for Remote Video URLs
+const convertVideoURLToHLS = async (targetId, videoUrl, targetType = 'video') => {
+    try {
+        console.log(`[HLS URL Conversion] Starting conversion for ${targetType} ID: ${targetId} from URL: ${videoUrl}`);
+
+        // Update status to 'processing'
+        if (targetType === 'course') {
+            await pool.query("UPDATE courses SET video_conversion_status = 'processing' WHERE id = ?", [targetId]);
+        } else {
+            await pool.query("UPDATE course_videos SET conversion_status = 'processing' WHERE id = ?", [targetId]);
+        }
+
+        // Download video bytes
+        const response = await axios.get(videoUrl, { responseType: 'arraybuffer' });
+        const buffer = Buffer.from(response.data);
+        const filename = videoUrl.split('/').pop() || 'input.mp4';
+
+        // Process to HLS
+        const playlistUrl = await processVideoToHLS(buffer, filename, targetId, targetType);
+
+        // Update database
+        if (targetType === 'course') {
+            await pool.query(
+                "UPDATE courses SET video_url = ?, original_video_url = IFNULL(original_video_url, ?), video_conversion_status = 'completed' WHERE id = ?",
+                [playlistUrl, videoUrl, targetId]
+            );
+        } else {
+            await pool.query(
+                "UPDATE course_videos SET video_url = ?, original_video_url = IFNULL(original_video_url, ?), conversion_status = 'completed' WHERE id = ?",
+                [playlistUrl, videoUrl, targetId]
+            );
+        }
+
+        console.log(`[HLS URL Conversion] Successfully converted ${targetType} ${targetId} to HLS`);
+
+    } catch (error) {
+        console.error(`[HLS URL Conversion] Error converting ${targetType} ${targetId}:`, error);
+
+        // Update status to 'failed'
+        if (targetType === 'course') {
+            await pool.query("UPDATE courses SET video_conversion_status = 'failed' WHERE id = ?", [targetId]);
+        } else {
+            await pool.query("UPDATE course_videos SET conversion_status = 'failed' WHERE id = ?", [targetId]);
+        }
     }
 };
 
@@ -256,14 +449,37 @@ const updateCourse = async (req, res) => {
         let videoUrl = clientVideoUrl || course.video_url;
         let notesUrl = clientNotesUrl || course.notes_pdf;
 
+        let originalVideoUrl = course.original_video_url;
+        let conversionStatus = course.video_conversion_status;
+
         if (req.files && req.files['thumbnail']) {
             await deleteFromS3(course.thumbnail);
             thumbnailUrl = await uploadToS3(req.files['thumbnail'][0]);
         }
 
         if (req.files && req.files['video']) {
+            const videoFile = req.files['video'][0];
+            const isHLS = videoFile.originalname.endsWith('.m3u8');
+
+            // Cleanup old files
             await deleteFromS3(course.video_url);
-            videoUrl = await uploadToS3(req.files['video'][0]);
+            await deleteFromS3(course.original_video_url);
+
+            if (isHLS) {
+                videoUrl = await uploadToS3(videoFile);
+                conversionStatus = 'skipped';
+                originalVideoUrl = null;
+            } else {
+                // MP4 - needs conversion
+                originalVideoUrl = await uploadToS3(videoFile);
+                videoUrl = originalVideoUrl; // Temporary
+                conversionStatus = 'pending';
+            }
+        } else if (clientVideoUrl && clientVideoUrl !== course.video_url && clientVideoUrl.toLowerCase().includes('.mp4')) {
+            // New direct MP4 URL provided
+            originalVideoUrl = clientVideoUrl;
+            videoUrl = clientVideoUrl;
+            conversionStatus = 'pending';
         }
 
         if (req.files && req.files['notes']) {
@@ -272,9 +488,23 @@ const updateCourse = async (req, res) => {
         }
 
         await pool.query(
-            "UPDATE courses SET title = ?, description = ?, price = ?, thumbnail = ?, category = ?, video_url = ?, notes_pdf = ? WHERE id = ?",
-            [title || course.title, description || course.description, price || course.price, thumbnailUrl, category || course.category, videoUrl, notesUrl, id]
+            "UPDATE courses SET title = ?, description = ?, price = ?, thumbnail = ?, category = ?, video_url = ?, notes_pdf = ?, video_conversion_status = ?, original_video_url = ? WHERE id = ?",
+            [title || course.title, description || course.description, price || course.price, thumbnailUrl, category || course.category, videoUrl, notesUrl, conversionStatus, originalVideoUrl, id]
         );
+
+        // Start background conversion if needed
+        if (conversionStatus === 'pending' && (!course.video_url || videoUrl !== course.video_url || originalVideoUrl !== course.original_video_url)) {
+            console.log(`[Update Course] Starting background HLS conversion for course ${id}`);
+            if (req.files && req.files['video']) {
+                convertCourseIntroToHLS(id, req.files['video'][0].buffer, req.files['video'][0].originalname).catch(err => {
+                    console.error(`[Update Course] Background conversion failed for course ${id}:`, err);
+                });
+            } else if (clientVideoUrl) {
+                convertVideoURLToHLS(id, clientVideoUrl, 'course').catch(err => {
+                    console.error(`[Update Course URL] Background conversion failed for course ${id}:`, err);
+                });
+            }
+        }
 
         res.status(200).json({ message: "Course updated successfully" });
     } catch (error) {
@@ -328,9 +558,26 @@ const updateVideo = async (req, res) => {
         let thumbnailUrl = clientThumbnailUrl || video.thumbnail;
         let notesUrl = clientNotesUrl || video.notes_pdf;
 
+        let originalVideoUrl = video.original_video_url;
+        let conversionStatus = video.conversion_status;
+
         if (req.files && req.files['video']) {
+            const videoFile = req.files['video'][0];
+            const isHLS = videoFile.originalname.endsWith('.m3u8');
+
+            // Cleanup old files
             await deleteFromS3(video.video_url);
-            videoUrl = await uploadToS3(req.files['video'][0]);
+            await deleteFromS3(video.original_video_url);
+
+            if (isHLS) {
+                videoUrl = await uploadToS3(videoFile);
+                conversionStatus = 'skipped';
+                originalVideoUrl = null;
+            } else {
+                originalVideoUrl = await uploadToS3(videoFile);
+                videoUrl = originalVideoUrl;
+                conversionStatus = 'pending';
+            }
         }
 
         if (req.files && req.files['thumbnail']) {
@@ -344,9 +591,17 @@ const updateVideo = async (req, res) => {
         }
 
         await pool.query(
-            "UPDATE course_videos SET title = ?, description = ?, video_url = ?, thumbnail = ?, notes_pdf = ?, duration = ?, playlist_id = ? WHERE id = ?",
-            [title || video.title, description || video.description, videoUrl, thumbnailUrl, notesUrl, duration || video.duration, playlistId || video.playlist_id, id]
+            "UPDATE course_videos SET title = ?, description = ?, video_url = ?, thumbnail = ?, notes_pdf = ?, duration = ?, playlist_id = ?, conversion_status = ?, original_video_url = ? WHERE id = ?",
+            [title || video.title, description || video.description, videoUrl, thumbnailUrl, notesUrl, duration || video.duration, playlistId || video.playlist_id, conversionStatus, originalVideoUrl, id]
         );
+
+        // Start background conversion if needed
+        if (req.files && req.files['video'] && conversionStatus === 'pending') {
+            console.log(`[Update Video] Starting background HLS conversion for video ID: ${id}`);
+            convertVideoToHLS(id, req.files['video'][0].buffer, req.files['video'][0].originalname).catch(err => {
+                console.error(`[Update Video] Background conversion failed for video ${id}:`, err);
+            });
+        }
 
         res.status(200).json({ message: "Video updated successfully" });
     } catch (error) {
@@ -472,6 +727,111 @@ const getCourseById = async (req, res) => {
     }
 };
 
+// Secure HLS Manifest Proxy (Resolves Mixed Content issues)
+const getManifest = async (req, res) => {
+    const { targetType, targetId } = req.params;
+
+    try {
+        const videoIdentifier = `${targetType}_${targetId}`;
+        const s3Key = `videos/hls/${videoIdentifier}/playlist.dat`;
+        const params = {
+            Bucket: BUCKET_NAME,
+            Key: s3Key
+        };
+
+        const data = await s3.getObject(params).promise();
+        let manifest = data.Body.toString();
+
+        const protocol = req.protocol === 'https' ? 'https' : 'http';
+        const host = req.get('host');
+        // Relative base for key and segments
+        const baseUrl = `${protocol}://${host}/api`;
+        const keyUrl = `${baseUrl}/videos/key/${targetType}/${targetId}`;
+
+        // 1. Replace the encryption key URI (More robust regex)
+        manifest = manifest.replace(/URI="([^"]*)"/g, `URI="${keyUrl}"`);
+
+        // 2. Resolve relative segment filenames to absolute S3 URLs
+        const s3BaseUrl = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION || 'us-east-1'}.amazonaws.com/videos/hls/${videoIdentifier}`;
+
+        // Process line by line for maximum safety against \r\n
+        const lines = manifest.split(/\r?\n/);
+        const transformedLines = lines.map(line => {
+            const trimmedLine = line.trim();
+            // If line is a segment (not a tag, and ends with .bin)
+            if (trimmedLine && !trimmedLine.startsWith('#') && trimmedLine.endsWith('.bin')) {
+                return `${s3BaseUrl}/${trimmedLine}`;
+            }
+            return line;
+        });
+
+        res.set('Content-Type', 'application/vnd.apple.mpegurl');
+        res.send(transformedLines.join('\n'));
+    } catch (error) {
+        console.error(`[Manifest Proxy] Error:`, error);
+        res.status(500).send('Manifest unavailable');
+    }
+};
+
+// Get Conversion Status for a Video
+const getConversionStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const [videos] = await pool.query(
+            "SELECT id, title, conversion_status, video_url FROM course_videos WHERE id = ?",
+            [id]
+        );
+
+        if (videos.length === 0) {
+            return res.status(404).json({ message: "Video not found" });
+        }
+
+        res.status(200).json({
+            videoId: videos[0].id,
+            title: videos[0].title,
+            conversionStatus: videos[0].conversion_status,
+            videoUrl: videos[0].video_url,
+            isHLS: videos[0].video_url?.includes('.m3u8') || false
+        });
+    } catch (error) {
+        console.error("Error fetching conversion status:", error);
+        res.status(500).json({ message: "Server error" });
+    }
+};
+
+
+// Secure Encryption Key Delivery
+const getEncryptionKey = async (req, res) => {
+    const { targetType, targetId } = req.params;
+
+    try {
+        console.log(`[Key Delivery] Fetching key for ${targetType} ID: ${targetId}`);
+
+        // Construct S3 path for the key
+        const s3Key = `videos/hls/${targetType}_${targetId}/video.key`;
+
+        const params = {
+            Bucket: BUCKET_NAME,
+            Key: s3Key
+        };
+
+        // Fetch from S3
+        const data = await s3.getObject(params).promise();
+
+        // Send binary key (16 bytes)
+        res.set('Content-Type', 'application/octet-stream');
+        res.send(data.Body);
+
+    } catch (error) {
+        console.error(`[Key Delivery] Error fetching key for ${targetId}:`, error);
+        if (error.code === 'NoSuchKey') {
+            return res.status(404).send('Key not found');
+        }
+        res.status(500).send('Internal Server Error');
+    }
+};
+
 module.exports = {
     createCourse,
     updateCourse,
@@ -484,5 +844,8 @@ module.exports = {
     getAllCourses,
     getCourseById,
     generatePresignedUrl,
+    getConversionStatus,
+    getEncryptionKey,
+    getManifest,
     uploadMiddleware
 };

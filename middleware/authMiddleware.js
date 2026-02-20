@@ -2,14 +2,20 @@ const jwt = require("jsonwebtoken");
 const pool = require("../config/awsDb");
 
 const authMiddleware = async (req, res, next) => {
+    console.log("--- Auth Request Path:", req.path, "---");
     try {
         const authHeader = req.headers.authorization;
         if (!authHeader || !authHeader.startsWith("Bearer ")) {
+            console.log("Auth Error: Missing or invalid Bearer header");
             return res.status(401).json({ message: "Authentication required" });
         }
 
         const token = authHeader.split(" ")[1];
+        console.log("--- Auth Debug ---");
+        console.log("Token received:", token.substring(0, 10) + "...");
+
         const decoded = jwt.verify(token, process.env.JWT_SECRET || "defaultsecret");
+        console.log("Decoded Token:", decoded);
 
         // Fetch user and latest token_version
         const [rows] = await pool.query("SELECT id, email, token_version FROM signup WHERE id = ?", [decoded.id]);
@@ -28,7 +34,10 @@ const authMiddleware = async (req, res, next) => {
         // Better to handle it strictly: payload.token_version must equal user.token_version
 
         // Note: decoded.token_version might be undefined for old tokens, so they will fail (good).
+        console.log("User from DB:", { id: user.id, token_version: user.token_version });
+
         if (decoded.token_version !== user.token_version) {
+            console.log("Token version mismatch!");
             return res.status(401).json({ message: "Session expired. Please login again." });
         }
 

@@ -20,7 +20,11 @@ const port = process.env.PORT || 3000;
 app.use(bodyParser.json());
 app.use(
   cors({
-    origin: "*",
+    origin: (origin, callback) => {
+      // Allow all origins for now but return the origin specifically to allow credentials
+      callback(null, true);
+    },
+    credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })

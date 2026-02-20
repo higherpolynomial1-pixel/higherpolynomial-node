@@ -11,6 +11,9 @@ const {
     getAllCourses,
     getCourseById,
     generatePresignedUrl,
+    getConversionStatus,
+    getEncryptionKey,
+    getManifest,
     uploadMiddleware
 } = require("../controllers/coursesController");
 const authMiddleware = require("../middleware/authMiddleware");
@@ -49,5 +52,14 @@ coursesRouter.delete("/admin/videos/:id", deleteVideo);
 
 // Get Videos for a Course
 coursesRouter.get("/courses/:courseId/videos", getCourseVideos);
+
+// Get Conversion Status for a Video
+coursesRouter.get("/admin/videos/:id/conversion-status", getConversionStatus);
+
+// Secure Encryption Key Delivery (proxied from S3)
+coursesRouter.get("/videos/key/:targetType/:targetId", authMiddleware, getEncryptionKey);
+
+// HLS Manifest Proxy (Resolves Mixed Content)
+coursesRouter.get("/videos/manifest/:targetType/:targetId", authMiddleware, getManifest);
 
 module.exports = coursesRouter;
