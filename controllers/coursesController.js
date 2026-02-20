@@ -742,9 +742,11 @@ const getManifest = async (req, res) => {
         const data = await s3.getObject(params).promise();
         let manifest = data.Body.toString();
 
-        const protocol = req.protocol === 'https' ? 'https' : 'http';
+        // 🛡️ PROTOCOL AWARENESS: Force HTTPS in production to prevent mixed content
         const host = req.get('host');
-        // Relative base for key and segments
+        const isLocal = host.includes('localhost') || host.includes('127.0.0.1');
+        const protocol = isLocal ? 'http' : 'https';
+
         const baseUrl = `${protocol}://${host}/api`;
         const keyUrl = `${baseUrl}/videos/key/${targetType}/${targetId}`;
 
@@ -766,6 +768,7 @@ const getManifest = async (req, res) => {
         });
 
         res.set('Content-Type', 'application/vnd.apple.mpegurl');
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         res.send(transformedLines.join('\n'));
     } catch (error) {
         console.error(`[Manifest Proxy] Error:`, error);

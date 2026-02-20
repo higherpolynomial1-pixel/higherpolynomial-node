@@ -14,6 +14,7 @@ const doubtRouter = require("./routes/doubtRoutes");
 
 // Initialize Express app
 const app = express();
+app.set('trust proxy', 1); // Enable trusting Vercel/proxies for correct protocol (HTTPS)
 const port = process.env.PORT || 3000;
 
 // Middleware
