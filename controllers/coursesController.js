@@ -381,31 +381,50 @@ const getCourseVideos = async (req, res) => {
         const { courseId } = req.params;
 
         const [videos] = await pool.query(
-            "SELECT * FROM course_videos WHERE course_id = ?",
+            `SELECT v.*, (SELECT COUNT(*) FROM quizzes q WHERE q.video_id = v.id) as hasQuiz 
+             FROM course_videos v 
+             WHERE v.course_id = ?`,
             [courseId]
         );
 
-        res.status(200).json({ videos });
+        const signedVideos = videos.map(v => ({
+            ...v,
+            video_url: signS3Url(v.video_url),
+            hasQuiz: v.hasQuiz > 0
+        }));
+
+        res.status(200).json({ videos: signedVideos });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: "Server error" });
     }
 };
 
+
 // Get All Courses
 const getAllCourses = async (req, res) => {
     try {
         const { role } = req.query; // Admin can pass ?role=admin to see drafts
-        let query = "SELECT * FROM courses";
+        let query = `
+            SELECT c.*, 
+            (SELECT COUNT(*) FROM quizzes q JOIN course_videos v ON q.video_id = v.id WHERE v.course_id = c.id) as quizCount 
+            FROM courses c
+        `;
 
         if (role !== 'admin') {
-            query += " WHERE status = 'published'";
+            query += " WHERE c.status = 'published'";
         }
 
-        query += " ORDER BY created_at DESC";
+        query += " ORDER BY c.created_at DESC";
 
         const [courses] = await pool.query(query);
-        res.status(200).json({ courses });
+
+        const coursesWithStatus = courses.map(c => ({
+            ...c,
+            hasQuizzes: parseInt(c.quizCount || 0) > 0
+        }));
+
+        res.status(200).json({ courses: coursesWithStatus });
     } catch (error) {
         console.error("Error fetching courses:", error);
         res.status(500).json({ message: "Server error" });
@@ -688,15 +707,20 @@ const getCourseById = async (req, res) => {
         const playlistsWithVideos = await Promise.all(
             playlists.map(async (p) => {
                 const [videos] = await pool.query(
-                    "SELECT * FROM course_videos WHERE playlist_id = ? ORDER BY order_index ASC, created_at ASC",
+                    `SELECT v.*, (SELECT COUNT(*) FROM quizzes q WHERE q.video_id = v.id) as hasQuiz 
+                     FROM course_videos v 
+                     WHERE v.playlist_id = ? 
+                     ORDER BY v.order_index ASC, v.created_at ASC`,
                     [p.id]
                 );
 
                 // Sign video URLs
                 const signedVideos = videos.map(v => ({
                     ...v,
-                    video_url: signS3Url(v.video_url)
+                    video_url: signS3Url(v.video_url),
+                    hasQuiz: parseInt(v.hasQuiz || 0) > 0
                 }));
+
 
                 return {
                     ...p,
@@ -705,15 +729,20 @@ const getCourseById = async (req, res) => {
             })
         );
 
+
         // Also fetch videos without playlists (legacy support)
         const [orphanedVideosResult] = await pool.query(
-            "SELECT * FROM course_videos WHERE course_id = ? AND playlist_id IS NULL ORDER BY created_at ASC",
+            `SELECT v.*, (SELECT COUNT(*) FROM quizzes q WHERE q.video_id = v.id) as hasQuiz 
+             FROM course_videos v 
+             WHERE v.course_id = ? AND v.playlist_id IS NULL 
+             ORDER BY v.created_at ASC`,
             [id]
         );
 
         const orphanedVideos = orphanedVideosResult.map(v => ({
             ...v,
-            video_url: signS3Url(v.video_url)
+            video_url: signS3Url(v.video_url),
+            hasQuiz: parseInt(v.hasQuiz) > 0
         }));
 
         res.status(200).json({
@@ -721,6 +750,7 @@ const getCourseById = async (req, res) => {
             playlists: playlistsWithVideos,
             orphanedVideos: orphanedVideos.length > 0 ? orphanedVideos : undefined
         });
+
     } catch (error) {
         console.error("Error fetching course details:", error);
         res.status(500).json({ message: "Server error" });
@@ -850,5 +880,6 @@ module.exports = {
     getConversionStatus,
     getEncryptionKey,
     getManifest,
-    uploadMiddleware
+    uploadMiddleware,
+    signS3Url // Exported for use in other controllers
 };

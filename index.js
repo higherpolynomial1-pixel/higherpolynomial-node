@@ -9,6 +9,8 @@ const userRouter = require("./routes/userRoutes");
 const coursesRouter = require("./routes/coursesRoutes");
 const playlistRouter = require("./routes/playlistRoutes");
 const doubtRouter = require("./routes/doubtRoutes");
+const testsRouter = require("./routes/testsRoute");
+
 
 
 
@@ -45,6 +47,9 @@ app.use("/api", playlistRouter);
 
 //doubt Routes
 app.use("/api", doubtRouter);
+
+//test/quiz Routes
+app.use("/api", testsRouter);
 
 // Start the server (Only if not in Vercel environment)
 if (process.env.NODE_ENV !== 'production') {

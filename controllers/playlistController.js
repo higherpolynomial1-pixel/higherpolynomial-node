@@ -1,4 +1,5 @@
 const pool = require("../config/awsDb");
+const { signS3Url } = require("./coursesController");
 
 /**
  * Create a new playlist for a course
@@ -47,7 +48,7 @@ const createPlaylist = async (req, res) => {
 };
 
 /**
- * Get all playlists for a specific course
+ * Get all playlists for a specific course (with videos and quiz info)
  */
 const getCoursePlaylists = async (req, res) => {
     try {
@@ -58,7 +59,32 @@ const getCoursePlaylists = async (req, res) => {
             [courseId]
         );
 
-        res.status(200).json({ playlists });
+        const playlistsWithVideos = await Promise.all(
+            playlists.map(async (p) => {
+                const [videos] = await pool.query(
+                    `SELECT v.*, (SELECT COUNT(*) FROM quizzes q WHERE q.video_id = v.id) as hasQuiz 
+                     FROM course_videos v 
+                     WHERE v.playlist_id = ? 
+                     ORDER BY v.order_index ASC, v.created_at ASC`,
+                    [p.id]
+                );
+
+                // Sign video URLs
+                const signedVideos = videos.map(v => ({
+                    ...v,
+                    video_url: signS3Url(v.video_url),
+                    hasQuiz: parseInt(v.hasQuiz || 0) > 0
+                }));
+
+
+                return {
+                    ...p,
+                    videos: signedVideos
+                };
+            })
+        );
+
+        res.status(200).json({ playlists: playlistsWithVideos });
     } catch (error) {
         console.error("Error fetching playlists:", error);
         res.status(500).json({ message: "Server error" });
@@ -86,19 +112,31 @@ const getPlaylistById = async (req, res) => {
 
         // Fetch videos in this playlist
         const [videos] = await pool.query(
-            "SELECT * FROM course_videos WHERE playlist_id = ? ORDER BY order_index ASC, created_at ASC",
+            `SELECT v.*, (SELECT COUNT(*) FROM quizzes q WHERE q.video_id = v.id) as hasQuiz 
+             FROM course_videos v 
+             WHERE v.playlist_id = ? 
+             ORDER BY v.order_index ASC, v.created_at ASC`,
             [id]
         );
 
+        // Sign URLs
+        const signedVideos = videos.map(v => ({
+            ...v,
+            video_url: signS3Url(v.video_url),
+            hasQuiz: parseInt(v.hasQuiz || 0) > 0
+        }));
+
         res.status(200).json({
             playlist,
-            videos
+            videos: signedVideos
         });
     } catch (error) {
         console.error("Error fetching playlist:", error);
         res.status(500).json({ message: "Server error" });
     }
 };
+
+
 
 /**
  * Update playlist details
