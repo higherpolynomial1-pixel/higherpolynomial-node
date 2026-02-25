@@ -98,4 +98,49 @@ const getDoubtRejectTemplate = (name, courseName) => {
     return getBaseTemplate("Doubt Session Update", content);
 };
 
-module.exports = { getOTPTemplate, getDoubtAcceptTemplate, getDoubtRejectTemplate };
+const getCounselingAcceptTemplate = (name, serviceName, duration, meetLink, scheduledAt) => {
+    const dateObj = new Date(scheduledAt);
+    const formattedDate = dateObj.toLocaleDateString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+    });
+    const formattedTime = dateObj.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+
+    const content = `
+        <h1>Hello ${name},</h1>
+        <p>Your <strong>${serviceName}</strong> session has been confirmed!</p>
+        <div class="info-box">
+            <p><strong>Date:</strong> ${formattedDate}</p>
+            <p><strong>Time:</strong> ${formattedTime}</p>
+            <p><strong>Duration:</strong> ${duration}</p>
+            <p><strong>Platform:</strong> Google Meet</p>
+        </div>
+        <p>Please use the link below to join the session at the scheduled time:</p>
+        <a href="${meetLink}" class="btn">Join Counseling Session</a>
+        <p style="margin-top: 20px; font-size: 14px; color: #6b7280;">Link: ${meetLink}</p>
+    `;
+    return getBaseTemplate("Counseling Session Confirmed", content);
+};
+
+const getCounselingRejectTemplate = (name, serviceName) => {
+    const content = `
+        <h1>Hello ${name},</h1>
+        <p>Regarding your request for a <strong>${serviceName}</strong> session.</p>
+        <p>We are currently unable to schedule this session as requested. If you have already made a payment, please contact our support team with your receipt for a priority rescheduling or refund.</p>
+        <p>We apologize for any inconvenience caused.</p>
+    `;
+    return getBaseTemplate("Counseling Session Update", content);
+};
+
+module.exports = {
+    getOTPTemplate,
+    getDoubtAcceptTemplate,
+    getDoubtRejectTemplate,
+    getCounselingAcceptTemplate,
+    getCounselingRejectTemplate
+};
