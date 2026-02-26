@@ -17,11 +17,9 @@ const counselingRouter = require("./routes/counselingRoutes");
 
 // Initialize Express app
 const app = express();
-app.set('trust proxy', 1); // Enable trusting Vercel/proxies for correct protocol (HTTPS)
+app.set('trust proxy', 1);
 const port = process.env.PORT || 3000;
 
-// Middleware
-app.use(bodyParser.json());
 const allowedOrigins = [
   "https://higherpolynomial.com",
   "https://www.higherpolynomial.com",
@@ -31,26 +29,35 @@ const allowedOrigins = [
   "http://localhost:5173",
 ];
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps or curl requests)
-      if (!origin) return callback(null, true);
+// Manual CORS Middleware (Top-level)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
 
-      if (allowedOrigins.indexOf(origin) !== -1) {
-        callback(null, true);
-      } else {
-        // Still allow for now to prevent blocking other environments, 
-        // but log it for debugging
-        console.warn(`CORS Warning: Origin ${origin} not in whitelist`);
-        callback(null, true);
-      }
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+  // Set the origin if it matches the whitelist, otherwise fallback safely
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  } else if (!origin) {
+    // Non-browser requests
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  } else {
+    // Other origins - still return one of ours to prevent blocking but warn
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigins[0]);
+  }
+
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
+  res.setHeader('Vary', 'Origin');
+
+  // Handle Preflight
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
+  next();
+});
+
+app.use(bodyParser.json());
 
 app.get("/", (req, res) => {
   res.json({ message: "HigherPolynomia API is running" });
